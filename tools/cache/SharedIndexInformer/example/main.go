@@ -1,17 +1,34 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os/user"
+	"reflect"
+
 	"sync"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
 	useIndexer()
 	useQueue()
+	curUser, _ := user.Current()
+	kubeConfigFile := curUser.HomeDir + "/.kube/config"
+	config, _ := clientcmd.BuildConfigFromFlags("", kubeConfigFile)
+	clientset, _ := kubernetes.NewForConfig(config)
+	informer := createSharedIndexInformer(clientset)
+	runSharedIndexInformer(informer)
+	informer, factory := createSharedIndexInformerByFactory(clientset)
+	runSharedIndexInformerByFactory(informer, factory)
 }
 
 type Resource struct {
@@ -135,6 +152,8 @@ func useQueue() {
 		// close()
 	}()
 	records := []string{}
+	// 设计一个简单的处理逻辑：仅仅负责将资源信息打印出来
+	// 真正业务中常是将资源事例放入一个workqueue中
 	recordFunc := func(obj interface{}) error {
 		deltas := obj.(cache.Deltas)
 		// 取最新的状态
@@ -159,7 +178,77 @@ func useQueue() {
 	// for _, rec := range records {
 	// 	fmt.Println(rec)
 	// }
-	assertEquals(records[0], "default/res1 is on node1 , last change is Sync, oldest change is Sync")
-	assertEquals(records[1], "extend/res1 is on node1 , last change is Sync, oldest change is Sync")
-	assertEquals(records[2], "default/res2 is on node2 , last change is Updated, oldest change is Added")
+	assertEquals(records[0], "default/res1 is on node1 , last change is Sync, oldest change is Sync")     // 按照顺序，default/res1是最先被添加到Queue的
+	assertEquals(records[1], "extend/res1 is on node1 , last change is Sync, oldest change is Sync")      // 按照顺序，extend/res1是第二个被添加到Queue的
+	assertEquals(records[2], "default/res2 is on node2 , last change is Updated, oldest change is Added") // default/res2最后加入，Deltas中存在它的两个版本
+}
+
+func createSharedIndexInformer(c *kubernetes.Clientset) cache.SharedIndexInformer {
+	namespace := v1.NamespaceAll
+	podListWatcher := cache.NewListWatchFromClient(c.CoreV1().RESTClient(), "pods", namespace, fields.Everything())
+	// 也可以选择下面这种写法
+	// podListWatcher = &cache.ListWatch{
+	// 	ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+	// 		return c.CoreV1().Pods(namespace).List(context.TODO(), options)
+	// 	},
+	// 	WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+	// 		return c.CoreV1().Pods(namespace).Watch(context.TODO(), options)
+	// 	},
+	// }
+	informer := cache.NewSharedIndexInformer(podListWatcher, &v1.Pod{}, 0, cache.Indexers{})
+	// go informer.Run(make(chan struct{})) // informer.Run本身是阻塞的，所以一般另起一个goroutine；暂时先不启动
+	return informer
+}
+
+func createSharedIndexInformerByFactory(c *kubernetes.Clientset) (cache.SharedIndexInformer, informers.SharedInformerFactory) {
+	factory := informers.NewSharedInformerFactoryWithOptions(c, 0, informers.WithNamespace(v1.NamespaceAll))
+	// factory.Start(make(chan struct{})) // factory.Start非阻塞；暂时先不启动
+	return factory.Core().V1().Pods().Informer(), factory
+}
+
+// 注册事件通知句柄，可以注册多组
+func withEventHandler(informer cache.SharedIndexInformer) {
+	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			key, _ := cache.MetaNamespaceKeyFunc(obj)
+			fmt.Println("add a pod ", key)
+		},
+		UpdateFunc: func(old interface{}, new interface{}) {
+			key, _ := cache.MetaNamespaceKeyFunc(new)
+			fmt.Println("update a pod ", key)
+		},
+		DeleteFunc: func(obj interface{}) {
+			key, _ := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
+			fmt.Println("delete a pod ", key)
+		},
+	})
+}
+
+func runSharedIndexInformer(informer cache.SharedIndexInformer) {
+	withEventHandler(informer)
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*10)
+	fmt.Println("### Start Informer")
+	// 一般情况下，例如常驻的controller-manager中的controller会传入一个永不close的channel
+	go informer.Run(ctx.Done())
+	// 由于informer刚启动时会从apiserver拉取大量当前的资源实例状态，所以总是等待这些这些资源实例被处理完毕(EventHandler)之后，再进行具体的业务逻辑
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		panic("timed out waiting for caches to sync")
+	}
+	<-ctx.Done()
+	fmt.Println("### End Informer")
+}
+
+func runSharedIndexInformerByFactory(informer cache.SharedIndexInformer, factory informers.SharedInformerFactory) {
+	withEventHandler(informer)
+	ctx, _ := context.WithTimeout(context.Background(), time.Second*10)
+	fmt.Println("### Start Informer By Factory")
+	// 一般情况下，例如常驻的controller-manager中的controller会传入一个永不close的channel
+	// factory.Start会调用注册在factory中的所有informer的Run方法
+	factory.Start(ctx.Done())
+	// 由于informer刚启动时会从apiserver拉取大量当前的资源实例状态，所以总是等待这些这些资源实例被处理完毕(EventHandler)之后，再进行具体的业务逻辑
+	if !factory.WaitForCacheSync(ctx.Done())[reflect.TypeOf(&v1.Pod{})] {
+		panic("timed out waiting for caches to sync")
+	}
+	<-ctx.Done()
+	fmt.Println("### End Informer")
 }
