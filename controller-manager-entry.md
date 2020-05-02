@@ -1,8 +1,8 @@
 # ControllerManager
 
+branch: release-v1.18
 
-源码commit:55bb72b77444
-2020.3.12
+commit: ff809a5d953ba778270ce8790b21d394821e1e28
 
 ## 源码入口
 
@@ -295,7 +295,7 @@ func StartControllers(ctx ControllerContext, startSATokenController InitFunc, co
 }
 ```
 
-#### 2.5) NewControllerInitializers,在controolermanager.go中
+#### 2.5) NewControllerInitializers,在controllermanager.go中
 
 此处定义了每个controller的初始化方法，其内容大同小异，所以2.6选取比较简单的namespace进行分析
 
@@ -458,7 +458,7 @@ func (nm *NamespaceController) worker() {
 }
 ```
 
-### 2.7) 参见client-go的例子
+#### 2.7) 参见client-go的例子
 
 官方提供的一个client使用workqueue的例子很好地描述了controller的大致实现，可以作为一个非常标准的模板用于参考。
 

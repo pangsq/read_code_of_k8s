@@ -103,7 +103,7 @@ type ReplicaSetController struct {
     1. eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "replicaset-controller"}) // 往这个recorder中发送的事件均注明事件来源是rs
 4. RealPodControl的创建，传入kubeClient和3中创建的recorder
     1. 这个recorder是用来主动向apiserver上传event的（比如rsController使用realPodControl创建pod时会生成一个"create pod"的事件）
-5. NewBaseController // 为了让rc能够服用代码，所以中间嵌入一层
+5. NewBaseController // 为了让rc能够复用代码，所以中间嵌入一层
 6. 创建expectations(NewControllerExpectations())和queue(DefaultControllerRateLimiter())
 7. rsInformer设置handler(addRS/updateRS/deleteRS), Lister(), HasSynced
 8. podInformer设置handler(addPod/updatePod/deletePod), Lister(), HasSynced
