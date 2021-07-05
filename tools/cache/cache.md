@@ -292,7 +292,6 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 
 	wait.Until(c.processLoop, time.Second, stopCh)
 }
-```
 
 func (c *controller) processLoop() {
 	for {
@@ -728,7 +727,7 @@ func isDeletionDup(a, b *Delta) *Delta {
 当knownObjects和items中都不存在这个obj时直接返回nil，即不需要处理这个deletion；否则将附加了deleted标示的object存入Deltas中
 
 ```
-unc (f *DeltaFIFO) Delete(obj interface{}) error {
+func (f *DeltaFIFO) Delete(obj interface{}) error {
 	id, err := f.KeyOf(obj)
 	if err != nil {
 		return KeyError{obj, err}
